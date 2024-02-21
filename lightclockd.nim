@@ -1,48 +1,43 @@
-import std/[net, parsecfg, strformat, streams, tables, times]
+import std/[net, os, parseutils, strformat, strutils, times]
 
 type
   InPacket = array[0..4, int64]
   OutPacket = array[0..4, int64]
 
 var configFileName = "lightclock.conf"
-const timeFmt = initTimeFormat("HH:mm")
 
-proc readConfig(): Config =
-  var f = configFileName.newFileStream fmRead
-  if f == nil:
-    echo "Cannot open config: ", configFileName
-    return newConfig()
-  defer: f.close
-  f.loadConfig
-
-proc getTime(section: OrderedTableRef[string, string], key: string, now: Time): int64 =
-  let str = section.getOrDefault(key)
-  if str.len == 0:
-    echo &"Missing config field '{key}'"
-    return 0
-  let t = str.parse(timeFmt)
+proc time(str: string, now: Time): int64 =
+  let st = str.split(':', 3)
+  var t = [0, 0, 0]
+  for i in 0..<st.len():
+    if st[i].parseInt(t[i]) != st[i].len:
+      raise newException(ValueError, "Invalid time: " & str)
   let dt = now.local
-  return dateTime(dt.year, dt.month, dt.monthDay, t.hour, t.minute, t.second,
-                  t.nanosecond, t.timezone).toTime.toUnix
+  return dateTime(dt.year, dt.month, dt.monthDay, t[0], t[1], t[2], 0,
+                  dt.timezone).toTime.toUnix
 
 proc makeReply(request: InPacket, reply: var OutPacket): bool =
-  let config = readConfig()
   let client = $request[0]
-  echo &"client {client}"
-  if client notin config:
+  try:
+    for line in lines(configFileName):
+      if line.startsWith('#'):
+        continue
+      let parts = line.split(' ')
+      if parts.len >= 5 and parts[0] == client:
+        echo "client ", client,
+             " start-on=", request[1].fromUnix, " finish-off=", request[2].fromUnix,
+             " start-off=", request[3].fromUnix, " finish-off=", request[4].fromUnix
+        let curTime = getTime()
+        reply[0] = curTime.toUnix
+        for i in 1..4:
+          reply[i] = parts[i].time(curTime)
+        return true
     echo "Unknown client: ", client
-    return false
-  let clientConfig = config[client]
-  echo &"client fade in start {$request[1].fromUnix}"
-  echo &"client fade in end {$request[2].fromUnix}"
-  echo &"client fade out start {$request[3].fromUnix}"
-  echo &"client fade out end {$request[4].fromUnix}"
-  reply[0] = 0x1234
-  reply[1] = request[1]
-  reply[2] = request[2]
-  reply[3] = request[3]
-  reply[4] = request[4]
-  return true
+  except IOError as e:
+    echo "Configuration error: ", e.msg
+  except ValueError as e:
+    echo e.msg
+  return false
 
 proc handleRequests(socket: Socket) =
   while true:
@@ -59,10 +54,17 @@ proc handleRequests(socket: Socket) =
     if input.makeReply output:
       data.setLen output.sizeof
       copyMem data.cstring, output.addr, data.len
-      echo &"sending reply to {clientPort}"
+      echo "sending reply to ", clientPort
       socket.sendTo clientAddr, clientPort, data
 
-echo readConfig()["1"].getTime("start", getTime())
+var port = 7117
+var listen = ""
+if paramCount() >= 1:
+  configFileName = paramStr(1)
+if paramCount() >= 2:
+  discard paramStr(2).parseInt(port)
+if paramCount() >= 3:
+  listen = paramStr(3)
 let socket = newSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-socket.bindAddr Port(7171)
+socket.bindAddr port.Port, listen
 socket.handleRequests
