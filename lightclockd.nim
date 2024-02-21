@@ -1,8 +1,8 @@
 import std/[net, os, parseutils, strformat, strutils, times]
 
 type
-  InPacket = array[0..4, int64]
-  OutPacket = array[0..4, int64]
+  InPacket = array[0..5, int64]
+  OutPacket = array[0..5, int64]
 
 var configFileName = "lightclock.conf"
 
@@ -17,7 +17,7 @@ proc time(str: string, now: Time): int64 =
                   dt.timezone).toTime.toUnix
 
 proc makeReply(request: InPacket, reply: var OutPacket): bool =
-  let client = $request[0]
+  let client = $request[1]
   try:
     for line in lines(configFileName):
       if line.startsWith('#'):
@@ -25,12 +25,13 @@ proc makeReply(request: InPacket, reply: var OutPacket): bool =
       let parts = line.split(' ')
       if parts.len >= 5 and parts[0] == client:
         echo "client ", client,
-             " start-on=", request[1].fromUnix, " finish-off=", request[2].fromUnix,
-             " start-off=", request[3].fromUnix, " finish-off=", request[4].fromUnix
+             " start-on=", request[2].fromUnix, " finish-off=", request[3].fromUnix,
+             " start-off=", request[4].fromUnix, " finish-off=", request[5].fromUnix
         let curTime = getTime()
-        reply[0] = curTime.toUnix
+        reply[0] = request[0]
+        reply[1] = curTime.toUnix
         for i in 1..4:
-          reply[i] = parts[i].time(curTime)
+          reply[i + 1] = parts[i].time(curTime)
         return true
     echo "Unknown client: ", client
   except IOError as e:
