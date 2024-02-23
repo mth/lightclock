@@ -1,0 +1,30 @@
+[Unit]
+Description=Light Clock Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/lightclockd /etc/lightclock.conf 7117
+Restart=on-failure
+User=daemon
+Group=daemon
+
+CapabilityBoundingSet=~CAP_SYS_ADMIN
+MemoryDenyWriteExecute=true
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET
+RestrictNamespaces=yes
+SecureBits=nonroot-locked
+SystemCallArchitectures=native
+SystemCallFilter=@system-service arm_fadvise64_64
+
+[Install]
+WantedBy=multi-user.target
