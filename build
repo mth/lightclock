@@ -1,0 +1,4 @@
+#!/bin/sh
+
+nim c -d:release --mm:arc lightclockd.nim
+strip --strip-all lightclockd
