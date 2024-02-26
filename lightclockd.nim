@@ -25,7 +25,7 @@ proc makeReply(request: InPacket, reply: var OutPacket): bool =
       let parts = line.split(' ')
       if parts.len >= 5 and parts[0] == client:
         echo "client ", client,
-             " start-on=", request[2].fromUnix, " finish-off=", request[3].fromUnix,
+             " start-on=", request[2].fromUnix, " finish-on=", request[3].fromUnix,
              " start-off=", request[4].fromUnix, " finish-off=", request[5].fromUnix
         let curTime = getTime()
         reply[0] = request[0]
