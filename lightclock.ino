@@ -16,6 +16,7 @@
 #define DAY 86400
 #define MAX_WAIT_MS 30000
 #define RETRY_MS 5000
+#define UPDATE_POLL_MS 200
 
 #define NS_NONE       0
 #define NS_CONNECTING 1
@@ -31,14 +32,14 @@ struct TimeMessage {
   int64_t finish_off;
 };
 
-static const char host_name =
+static const char host_name[] =
   { 'l', 'i', 'g', 'h', 't', 'c', 'l', 'o', 'c', 'k', '0' + CLOCK_ID, '\0' };
 
 AsyncUDP udp;
-IPAddress server_ip;
-TimeMessage config;
-time_t last_conf_update = 0;
-volatile atomic_int net_state = NS_NONE;
+static IPAddress server_ip;
+static TimeMessage config;
+static volatile time_t last_conf_update = 0;
+static volatile int net_state = NS_NONE;
 
 static void resolve_server_ip() {
   if (!server_ip[0]) {
@@ -72,19 +73,21 @@ static void request_light_data() {
     if (packet.length() == sizeof response) {
       memcpy(&response, packet.data(), sizeof response);
       if (response.request_id == config.request_id) {
-        time(&last_conf_update);
+        time_t cur_t;
+        time(&cur_t);
         config = response;
-        if (last_conf_update < response.clock_id - 1 ||
-	    last_conf_update > response.clock_id + 1) {
+        if (cur_t < response.clock_id - 1 ||
+            cur_t > response.clock_id + 1) {
           timeval epoch = { response.clock_id, 0 };
           settimeofday(&epoch, 0);
-          time(&last_conf_update);
-          Serial.print("Updated time: ");
-          Serial.print(ctime(&last_conf_update));
+          time(&cur_t);
+          Serial.printf("Updated time: %d (%d); ", (int) cur_t, (int) response.clock_id);
+          Serial.print(ctime(&cur_t));
         } else {
-          Serial.print("Got config, time don't need a update: ");
-          Serial.print(ctime(&last_conf_update));
+          Serial.printf("Got config, time don't need a update: %d (%d); ", (int) cur_t, (int) response.clock_id);
+          Serial.print(ctime(&cur_t));
         }
+	last_conf_update = cur_t;
       } else {
         Serial.println("Invalid request_id in response");
       }
@@ -100,20 +103,12 @@ static void request_light_data() {
 }
 
 static void startWiFi() {
-  static bool initialized = false;
-
   Serial.write("startWifi called.\n");
   net_state = NS_CONNECTING;
   digitalWrite(LED_BUILTIN, LOW);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
-  WiFi.setHostName(host_name);
-  if (!initialized) {
-    Serial.write("setting wifi event handlers\n");
-    WiFi.onEvent(got_ip_handler, ARDUINO_EVENT_WIFI_STA_GOT_IP);
-    WiFi.onEvent(wifi_disconnect_handler, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-    initialized = true;
-  }
+  WiFi.setHostname(host_name);
   Serial.write("WiFi.begin()\n");
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   WiFi.setSleep(false);
@@ -130,11 +125,13 @@ void setup() {
 }
 
 static int update_light(int *light_on) {
+  TimeMessage cfg = config;
   struct timeval tv;
-  gettimeofday(&tv);
+  gettimeofday(&tv, 0);
   int64_t t = tv.tv_sec;
-  if (t > config.finish_off) {
-    t -= ((t - config.finish_off) / DAY + 1) * DAY;
+
+  if (t > cfg.finish_off) {
+    //t -= ((t - cfg.finish_off) / DAY + 1) * DAY;
   }
 
   int loop_time = 1000;
@@ -144,27 +141,39 @@ static int update_light(int *light_on) {
       delay(timestep);
     }
     int brightness = 0;
-    if (t < config.start_on) {
-      timestep = config.start_on - t;
-    } else if (t > config.start_off) {
+    if (t < cfg.start_on) {
+      timestep = (cfg.start_on - t) * 1000 - (tv.tv_usec / 1000);
+      Serial.printf("%lgs until start\n", (double) timestep / 1000.0);
+    } else if (t >= cfg.finish_off) {
       timestep = MAX_WAIT_MS;
+      Serial.println("light has already gone off");
     } else {
-      unsigned dt, tl;
-      if (t <= config.finish_on) {
-	dt = ((t - start_on) * 1000) + (tv.tv_sec / 1000);
-	tl = (finish_on - start_on) * 1000;
-        time_step = dt / PWM_MAX; 
-      } else if (t > config.start_off) {
-	dt = ((finish_off - t) * 1000) - (tv.tv_sec / 1000);
-	tl = (finish_off - start_off) * 1000;
-        time_step = dt / PWM_MAX; 
+      int dt, total;
+      if (t <= cfg.finish_on) {
+        //Serial.print("FADE-IN ");
+        dt = ((t - cfg.start_on) * 1000) + (tv.tv_usec / 1000);
+        total = (cfg.finish_on - cfg.start_on) * 1000;
+        timestep = dt / PWM_MAX;
+      } else if (t >= cfg.start_off) {
+        //Serial.print("FADE-OFF ");
+        dt = ((cfg.finish_off - t) * 1000) - (tv.tv_usec / 1000);
+        total = (cfg.finish_off - cfg.start_off) * 1000;
+        timestep = dt / PWM_MAX;
       } else {
-	dt = tl = 1;
-	time_step = config.start_off - t;
+        Serial.print("FULL-ON ");
+        dt = total = 1;
+        timestep = (cfg.start_off - t) * 1000 - (tv.tv_usec / 1000);
+        Serial.printf("%lgs until fade-off ", (double) timestep / 1000.0);
       }
-      brightness = tl * PWM_MAX / dt;
-      if (time_step < 3) {
-	time_step = 3;
+      brightness = dt * PWM_MAX / total;
+      if (brightness > PWM_MAX) {
+        brightness = PWM_MAX;
+      } else if (brightness < 0) {
+        brightness = 0;
+      }
+      //Serial.printf("t=%d timestep=%d brightness=%d total=%d dt=%d\n", (int) t, timestep, brightness, total, dt);
+      if (timestep < 3) {
+        timestep = 3;
       }
     }
     ledcWrite(PWM_CHANNEL, brightness);
@@ -174,31 +183,40 @@ static int update_light(int *light_on) {
       timestep = MAX_WAIT_MS;
     }
     loop_time -= timestep;
-    tv.tv_sec += timestep * 1000;
+    tv.tv_usec += timestep * 1000;
   }
+  Serial.printf("t=%d timestep=%d brightness=%d\n", (int) t, timestep, *light_on);
   return timestep;
 }
 
 void loop() {
+  static int update_counter = 0;
   esp_task_wdt_reset();
 
   time_t t = time(NULL);
-  if (t > last_conf_update + 30) {
+  printf("net_state=%d s_on=%d f_on=%d s_off=%d f_off=%d\n",
+         net_state, (int) config.start_on, (int) config.finish_on,
+         (int) config.start_off, (int) config.finish_off);
+  if (!last_conf_update || t > last_conf_update + 25 || config.finish_on >= config.start_off) {
     if (net_state != NS_NONE && !WiFi.isConnected()) {
       net_state = NS_NONE;
     }
     switch (net_state) {
       case NS_NONE:
         startWiFi();
-	break;
+        break;
+      case NS_UPDATING:
+        if (++update_counter < 2000 / UPDATE_POLL_MS) {
+          break;
+        }
       case NS_CONNECTING:
         if (!WiFi.isConnected()) {
-	  break;
-	}
-	net_state = NS_CONNECTED;
+          break;
+        }
+        net_state = NS_CONNECTED;
       case NS_CONNECTED:
+        update_counter = 0;
         request_light_data();
-	break;
     }
   }
   digitalWrite(LED_BUILTIN, WiFi.isConnected() ? HIGH : LOW);
@@ -208,17 +226,19 @@ void loop() {
   if (config.finish_on < config.start_off) {
     wait = update_light(&light_on);
   }
-  if (wait < 10 || net_state == NS_CONNECTING || net_state = NS_UPDATING) {
-    if (wait > 1000) {
-      wait = 1000;
+  if (net_state == NS_CONNECTING || net_state == NS_UPDATING) {
+    if (wait > UPDATE_POLL_MS) {
+      wait = UPDATE_POLL_MS;
     }
+    delay(wait);
+  } else if (wait < 10 || (light_on && light_on < PWM_MAX)) {
     delay(wait);
   } else {
     digitalWrite(LED_BUILTIN, LOW);
     esp_sleep_enable_timer_wakeup(wait * 1000);
-    Serial.println("Going to sleep");
+    Serial.printf("Going to sleep for %dms, light=%d\n", wait, light_on);
     Serial.flush();
-    if (wait < 30000 || light_on) {
+    if (wait < 25000 || light_on) {
       esp_light_sleep_start();
     } else {
       esp_deep_sleep_start();
