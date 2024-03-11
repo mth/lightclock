@@ -5,6 +5,7 @@ type
   OutPacket = array[0..5, int64]
 
 var configFileName = "lightclock.conf"
+var lastConf: OutPacket = [-1i64, -1i64, -1i64, -1i64, -1i64, -1i64]
 
 proc time(str: string, now: Time): int64 =
   let st = str.split(':', 3)
@@ -24,9 +25,11 @@ proc makeReply(request: InPacket, reply: var OutPacket): bool =
         continue
       let parts = line.split(' ')
       if parts.len >= 5 and parts[0] == client:
-        echo "client ", client,
-             " start-on=", request[2].fromUnix, " finish-on=", request[3].fromUnix,
-             " start-off=", request[4].fromUnix, " finish-off=", request[5].fromUnix
+        if request != lastConf:
+          echo "client ", client,
+               " start-on=", request[2].fromUnix, " finish-on=", request[3].fromUnix,
+               " start-off=", request[4].fromUnix, " finish-off=", request[5].fromUnix
+          lastConf = request
         let curTime = getTime()
         reply[0] = request[0]
         reply[1] = curTime.toUnix
