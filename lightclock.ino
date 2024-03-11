@@ -52,32 +52,37 @@ static const char host_name[] =
   { 'l', 'i', 'g', 'h', 't', 'c', 'l', 'o', 'c', 'k', '0' + CLOCK_ID, '\0' };
 
 static AsyncUDP udp;
-static IPAddress server_ip;
-static TimeMessage config;
+RTC_NOINIT_ATTR uint32_t server_ip;
+// These fields should be accessed via getConfig/setConfig
+RTC_NOINIT_ATTR TimeMessage config;
+RTC_NOINIT_ATTR time_t last_conf_update;
 static SemaphoreHandle_t configMutex = 0;
-static std::atomic<time_t> last_conf_update(0);
 static std::atomic_int net_state(NS_NONE);
 
 #define LOCK_CONF(a) while (!xSemaphoreTake(configMutex, portMAX_DELAY)) delay(1);\
   a; xSemaphoreGive(configMutex)
 
-static TimeMessage getConfig() {
-  LOCK_CONF(TimeMessage result(config));
+static TimeMessage getConfig(time_t *last_update) {
+  time_t tmp;
+  if (!last_update) {
+    last_update = &tmp;
+  }
+  LOCK_CONF(TimeMessage result(config); *last_update = last_conf_update);
   return result;
 }
 
-static void setConfig(const TimeMessage& msg) {
-  LOCK_CONF(config = msg);
+static void setConfig(const TimeMessage& msg, time_t cur_t) {
+  LOCK_CONF(config = msg; last_conf_update = cur_t);
 }
 
 static void resolve_server_ip() {
-  if (!server_ip[0] || last_conf_update.load() == 0) {
+  if (!server_ip) {
     struct hostent *addr = gethostbyname(CONF_SERVER);
     if (addr) {
-      server_ip = IPAddress((uint8_t*) addr->h_addr_list[0]);
-      PRINTF("SERVER %u.%u.%u.%u\n", server_ip[0],server_ip[1],server_ip[2],server_ip[3]);
+      memcpy(&server_ip, addr->h_addr_list[0], 4);
+      PRINTF("SERVER %x\n", server_ip);
     } else {
-      server_ip[0] = 0;
+      server_ip = 0;
       PRINT("Unknown host\n");
     }
   }
@@ -86,7 +91,8 @@ static void resolve_server_ip() {
 static void request_light_data() {
   WiFi.setSleep(false);
   resolve_server_ip();
-  if (!udp.connect(server_ip, CONF_SERVER_PORT)) {
+  IPAddress server_ip_addr(server_ip);
+  if (!udp.connect(server_ip_addr, CONF_SERVER_PORT)) {
     PRINT("Couldn't connect\n");
     //WiFi.disconnect();
     //net_state = NS_NONE;
@@ -100,13 +106,12 @@ static void request_light_data() {
     TimeMessage response;
     if (packet.length() == sizeof response) {
       memcpy(&response, packet.data(), sizeof response);
-      if (response.request_id == config.request_id) {
+      if (response.request_id == getConfig(0).request_id) {
         time_t cur_t;
         time(&cur_t);
         PRINTF("CONF s_on=%d f_on=%d s_off=%d f_off=%d\n",
                (int) response.start_on, (int) response.finish_on,
                (int) response.start_off, (int) response.finish_off);
-        setConfig(response);
         if (cur_t < response.clock_id - 1 ||
             cur_t > response.clock_id + 1) {
           timeval epoch = { response.clock_id, 0 };
@@ -118,7 +123,7 @@ static void request_light_data() {
           PRINTF("Time OK %d (%d); ", (int) cur_t, (int) response.clock_id);
           PRINT(ctime(&cur_t));
         }
-        last_conf_update = cur_t;
+        setConfig(response, cur_t);
       } else {
         PRINT("Invalid request_id in response\n");
       }
@@ -172,6 +177,10 @@ void setup() {
   case ESP_SLEEP_WAKEUP_ULP:
     break;
   default:
+    // Zero RTC variables
+    server_ip = 0;
+    last_conf_update = 0;
+    memset(&config, 0, sizeof config);
     int i;
     for (i = 0; i < PWM_MAX / 16; ++i) {
       ledcWrite(PWM_CHANNEL, i);
@@ -188,7 +197,7 @@ void setup() {
 }
 
 static int update_light(int *light_on) {
-  TimeMessage cfg = getConfig();
+  TimeMessage cfg = getConfig(0);
   if (!cfg.ok()) {
     PRINTF("No config for light ns=%d\n", net_state.load());
     return 200;
@@ -263,7 +272,8 @@ void loop() {
   esp_task_wdt_reset();
 
   time_t t = time(NULL);
-  if (!last_conf_update || t > last_conf_update + 25 || !getConfig().ok()) {
+  time_t last_update;
+  if (!getConfig(&last_update).ok() || !last_update || t > last_update + 25) {
     if (net_state != NS_NONE && !WiFi.isConnected()) {
       net_state = NS_NONE;
     }
@@ -291,7 +301,7 @@ void loop() {
   int wait = update_light(&light_on);
   esp_task_wdt_reset();
 
-  if (net_state == NS_CONNECTING || net_state == NS_UPDATING || t > last_conf_update + 25) {
+  if (net_state == NS_CONNECTING || net_state == NS_UPDATING || t > last_update + 25) {
     if (wait > UPDATE_POLL_MS) {
       wait = UPDATE_POLL_MS;
     }
@@ -304,10 +314,10 @@ void loop() {
     esp_sleep_enable_timer_wakeup(wait * 1000);
     PRINTF("Sleep for %dms, light=%d\n", wait, light_on);
     FLUSH();
-    //if (wait < 25000 || light_on) {
+    if (wait < 25000 || light_on) {
       esp_light_sleep_start();
-    //} else {
-    //  esp_deep_sleep_start();
-    //}
+    } else {
+      esp_deep_sleep_start();
+    }
   }
 }
