@@ -211,8 +211,8 @@ static int update_light(int *light_on) {
     t -= ((t - cfg.finish_off) / DAY + 1) * DAY;
   }
 
-  int loop_time = 1000;
-  int timestep = 0;
+  int loop_time = UPDATE_POLL_MS;
+  int64_t timestep = 0;
   while (loop_time > 0) {
     if (timestep > 0) {
       delay(timestep);
@@ -225,7 +225,7 @@ static int update_light(int *light_on) {
       timestep = MAX_WAIT_MS;
       PRINT("light has already gone off ");
     } else {
-      int dt, total;
+      int64_t dt, total;
       if (t <= cfg.finish_on) {
         //PRINT("FADE-IN ");
         dt = ((t - cfg.start_on) * 1000) + (tv.tv_usec / 1000);

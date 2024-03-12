@@ -59,7 +59,7 @@ proc handleRequests(socket: Socket) =
     if input.makeReply output:
       data.setLen output.sizeof
       copyMem data.cstring, output.addr, data.len
-      echo "sending reply to ", clientPort
+      # echo "sending reply to ", clientPort
       socket.sendTo clientAddr, clientPort, data
 
 var port = 7117
