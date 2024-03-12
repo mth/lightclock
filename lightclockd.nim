@@ -25,6 +25,7 @@ proc makeReply(request: InPacket, reply: var OutPacket): bool =
         continue
       let parts = line.split(' ')
       if parts.len >= 5 and parts[0] == client:
+        lastConf[0] = request[0] # request id is always different
         if request != lastConf:
           echo "client ", client,
                " start-on=", request[2].fromUnix, " finish-on=", request[3].fromUnix,
