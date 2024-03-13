@@ -140,17 +140,6 @@ static void request_light_data() {
   PRINTF("Sent request %lu\n", sizeof request);
 }
 
-static void startWiFi() {
-  PRINTF("startWifi called. ");
-  digitalWrite(LED_BUILTIN, LOW);
-  WiFi.setHostname(host_name);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA);
-  PRINTF("WiFi.begin(%s)\n", host_name);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  WiFi.setSleep(false);
-}
-
 void setup() {
   configMutex = xSemaphoreCreateMutex();
 #if SERIAL
@@ -262,8 +251,19 @@ static int update_light(int *light_on) {
   return timestep;
 }
 
+static void startWiFi() {
+  PRINTF("startWifi called. ");
+  digitalWrite(LED_BUILTIN, LOW);
+  WiFi.setHostname(host_name);
+  WiFi.mode(WIFI_STA);
+  PRINTF("WiFi.begin(%s)\n", host_name);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.setSleep(false);
+}
+
 void loop() {
   static int timeout_counter = 0;
+  static const int max_poll_count = 40000 / UPDATE_POLL_MS;
 
   digitalWrite(LED_BUILTIN, HIGH);
   esp_task_wdt_reset();
@@ -271,8 +271,12 @@ void loop() {
   time_t t = time(NULL);
   time_t last_update;
   if (!getConfig(&last_update).ok() || !last_update || t > last_update + 25) {
-    if (timeout_counter >= 40000 / UPDATE_POLL_MS) {
-      net_state = NS_NONE;
+    if (timeout_counter >= max_poll_count) {
+      if (timeout_counter == max_poll_count) {
+        WiFi.disconnect(true);
+      } else {
+        net_state = NS_NONE;
+      }
     }
     switch (net_state) {
       case NS_UPDATING:
