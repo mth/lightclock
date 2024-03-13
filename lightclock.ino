@@ -263,7 +263,7 @@ static void startWiFi() {
 
 void loop() {
   static int timeout_counter = 0;
-  static const int max_poll_count = 40000 / UPDATE_POLL_MS;
+  static const int max_poll_count = 20000 / UPDATE_POLL_MS;
 
   digitalWrite(LED_BUILTIN, HIGH);
   esp_task_wdt_reset();
