@@ -75,31 +75,26 @@ static void setConfig(const TimeMessage& msg, time_t cur_t) {
   LOCK_CONF(config = msg; last_conf_update = cur_t);
 }
 
-static void resolve_server_ip() {
+static bool resolve_server_ip() {
   if (!server_ip) {
     struct hostent *addr = gethostbyname(CONF_SERVER);
-    if (addr) {
-      memcpy(&server_ip, addr->h_addr_list[0], 4);
-      PRINTF("SERVER %x\n", server_ip);
-    } else {
-      server_ip = 0;
+    if (!addr) {
       PRINT("Unknown host\n");
+      return false;
     }
+    memcpy(&server_ip, addr->h_addr_list[0], 4);
+    PRINTF("SERVER %x\n", server_ip);
   }
+  return true;
 }
 
-static void request_light_data() {
+static bool establish_udp_conn() {
   WiFi.setSleep(false);
-  resolve_server_ip();
-  IPAddress server_ip_addr(server_ip);
-  if (!udp.connect(server_ip_addr, CONF_SERVER_PORT)) {
+  if (!resolve_server_ip() || !udp.connect(IPAddress(server_ip), CONF_SERVER_PORT)) {
     PRINT("Couldn't connect\n");
-    //WiFi.disconnect();
-    //net_state = NS_NONE;
-    return;
+    return false;
   }
   PRINT("UDP connected. ");
-  net_state = NS_UPDATING;
   udp.onPacket([](AsyncUDPPacket packet) {
     WiFi.setSleep(true);
     net_state = NS_CONNECTED;
@@ -131,7 +126,10 @@ static void request_light_data() {
       PRINT("Invalid response length\n");
     }
   });
+  return true;
+}
 
+static void request_light_data() {
   struct timeval tv;
   gettimeofday(&tv, 0);
   int64_t random = esp_random() ^ tv.tv_usec;
@@ -144,7 +142,6 @@ static void request_light_data() {
 
 static void startWiFi() {
   PRINTF("startWifi called. ");
-  net_state = NS_CONNECTING;
   digitalWrite(LED_BUILTIN, LOW);
   WiFi.setHostname(host_name);
   WiFi.disconnect(true);
@@ -266,7 +263,7 @@ static int update_light(int *light_on) {
 }
 
 void loop() {
-  static int update_counter = 0;
+  static int timeout_counter = 0;
 
   digitalWrite(LED_BUILTIN, HIGH);
   esp_task_wdt_reset();
@@ -274,24 +271,28 @@ void loop() {
   time_t t = time(NULL);
   time_t last_update;
   if (!getConfig(&last_update).ok() || !last_update || t > last_update + 25) {
-    if (net_state != NS_NONE && !WiFi.isConnected()) {
+    if (timeout_counter >= 40000 / UPDATE_POLL_MS) {
       net_state = NS_NONE;
     }
     switch (net_state) {
+      case NS_UPDATING:
+        if (WiFi.isConnected()) {
+          ++timeout_counter;
+          break;
+        }
       case NS_NONE:
+        net_state = NS_CONNECTING;
+        timeout_counter = 0;
         startWiFi();
         break;
-      case NS_UPDATING:
-        if (++update_counter < 2000 / UPDATE_POLL_MS) {
-          break;
-        }
       case NS_CONNECTING:
-        if (!WiFi.isConnected()) {
+        if (!WiFi.isConnected() || !establish_udp_conn()) {
+          ++timeout_counter;
           break;
         }
-        net_state = NS_CONNECTED;
       case NS_CONNECTED:
-        update_counter = 0;
+        net_state = NS_UPDATING;
+        timeout_counter = 0;
         request_light_data();
     }
   }
