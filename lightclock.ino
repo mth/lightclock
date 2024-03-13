@@ -145,7 +145,6 @@ void setup() {
 #if SERIAL
   Serial.begin(115200);
 #endif
-  PRINT("Setup start...");
   pinMode(LED_BUILTIN, OUTPUT);
   ledcSetup(PWM_CHANNEL, PWM_FREQ, PWM_RESOLUTION);
   ledcAttachPin(4, PWM_CHANNEL);
@@ -154,15 +153,16 @@ void setup() {
   esp_task_wdt_reset();
   btStop();
   esp_bt_controller_disable();
-  PRINT(" done.\n");
   switch (esp_sleep_get_wakeup_cause()) {
   case ESP_SLEEP_WAKEUP_EXT0:
   case ESP_SLEEP_WAKEUP_EXT1:
   case ESP_SLEEP_WAKEUP_TIMER:
   case ESP_SLEEP_WAKEUP_TOUCHPAD:
   case ESP_SLEEP_WAKEUP_ULP:
+    PRINT("Setup from deep sleep\n");
     break;
   default:
+    PRINT("Setup from boot/reset\n");
     // Zero RTC variables
     server_ip = 0;
     last_conf_update = 0;
@@ -185,7 +185,7 @@ void setup() {
 static int update_light(int *light_on) {
   TimeMessage cfg = getConfig(0);
   if (!cfg.ok()) {
-    PRINTF("No config for light ns=%d\n", net_state.load());
+    PRINTF("No config for light ns=%d (%d >= %d)\n", net_state.load(), (int) cfg.finish_on, (int) cfg.start_off);
     return 200;
   }
   PRINTF("ns=%d ", net_state.load());
@@ -234,20 +234,21 @@ static int update_light(int *light_on) {
         brightness = 0;
       }
       //PRINTF("t=%d timestep=%d brightness=%d total=%d dt=%d\n", (int) t, timestep, brightness, total, dt);
-      if (timestep < 3) {
-        timestep = 3;
-      }
     }
     ledcWrite(PWM_CHANNEL, brightness);
     *light_on = brightness;
 
     if (timestep > MAX_WAIT_MS) {
       timestep = MAX_WAIT_MS;
+    } else if (timestep < 3) {
+      timestep = 3;
     }
     loop_time -= timestep;
     tv.tv_usec += timestep * 1000;
+    t += tv.tv_usec / 1000000;
+    tv.tv_usec = tv.tv_usec % 1000000;
   }
-  PRINTF("t=%d wait=%d pwm=%d\n", (int) t, timestep, *light_on);
+  PRINTF("t=%d wait=%d pwm=%d\n", (int) t, (int) timestep, *light_on);
   return timestep;
 }
 
@@ -263,7 +264,6 @@ static void startWiFi() {
 
 void loop() {
   static int timeout_counter = 0;
-  static const int max_poll_count = 20000 / UPDATE_POLL_MS;
 
   digitalWrite(LED_BUILTIN, HIGH);
   esp_task_wdt_reset();
@@ -271,12 +271,10 @@ void loop() {
   time_t t = time(NULL);
   time_t last_update;
   if (!getConfig(&last_update).ok() || !last_update || t > last_update + 25) {
-    if (timeout_counter >= max_poll_count) {
-      if (timeout_counter == max_poll_count) {
-        WiFi.disconnect(true);
-      } else {
-        net_state = NS_NONE;
-      }
+    if (timeout_counter >= 20000 / UPDATE_POLL_MS) {
+      WiFi.disconnect(true);
+      net_state = NS_NONE;
+      delay(1);
     }
     switch (net_state) {
       case NS_UPDATING:
@@ -287,8 +285,10 @@ void loop() {
       case NS_NONE:
         net_state = NS_CONNECTING;
         timeout_counter = 0;
-        startWiFi();
-        break;
+        if (!WiFi.isConnected()) {
+          startWiFi();
+          break;
+        }
       case NS_CONNECTING:
         if (!WiFi.isConnected() || !establish_udp_conn()) {
           ++timeout_counter;
