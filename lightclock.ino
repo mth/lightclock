@@ -132,7 +132,7 @@ static bool establish_udp_conn() {
 static void request_light_data() {
   struct timeval tv;
   gettimeofday(&tv, 0);
-  int64_t random = esp_random() ^ tv.tv_usec;
+  int64_t random = esp_random() ^ ((uint64_t) tv.tv_usec << 32);
   LOCK_CONF(config.request_id = random ^ (config.request_id << 16);
     TimeMessage request = config);
   request.clock_id = CLOCK_ID; // this clock
