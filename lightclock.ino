@@ -266,19 +266,19 @@ void loop() {
       WiFi.disconnect(true);
       net_state = NS_NONE;
       delay(1);
+    } else if (net_state != NS_NONE && net_state != NS_CONNECTING && !WiFi.isConnected()) {
+      net_state = NS_NONE;
     }
     switch (net_state) {
       case NS_UPDATING:
-        if (WiFi.isConnected()) {
-          if (receive_light_data()) {
-            net_state = NS_CONNECTED;
-	    timeout_counter = 0;
-            WiFi.setSleep(true);
-          } else {
-            ++timeout_counter;
-          }
-          break;
+        if (receive_light_data()) {
+          net_state = NS_CONNECTED;
+          timeout_counter = 0;
+          WiFi.setSleep(true);
+        } else {
+          ++timeout_counter;
         }
+        break;
       case NS_NONE:
         net_state = NS_CONNECTING;
         timeout_counter = 0;
@@ -315,6 +315,9 @@ void loop() {
   } else if (wait < 10 || (light_on && light_on < PWM_MAX)) {
     delay(wait);
   } else {
+    if (wait > 10000) {
+      WiFi.disconnect(true);
+    }
     WiFi.setSleep(true);
     digitalWrite(LED_BUILTIN, LOW);
     esp_sleep_enable_timer_wakeup(wait * 1000);
