@@ -22,15 +22,19 @@
 #define NS_CONNECTED  2
 #define NS_UPDATING   3
 
-#define SERIAL 1
-#if SERIAL
-#define PRINTF(...) Serial.printf(__VA_ARGS__)
-#define PRINT(s) Serial.print(s)
-#define FLUSH() Serial.flush()
-#else
+#ifdef NO_SERIAL
 #define PRINTF(...)
 #define PRINT(s)
 #define FLUSH()
+#else
+#define PRINTF(...) Serial.printf(__VA_ARGS__)
+#define PRINT(s) Serial.print(s)
+#define FLUSH() Serial.flush()
+#endif
+#ifdef USE_DEEP_SLEEP
+#define RTC_MEMORY RTC_NOINIT_ATTR
+#else
+#define RTC_MEMORY static
 #endif
 
 struct TimeMessage {
@@ -52,9 +56,9 @@ static const char host_name[] =
 static WiFiUDP udp;
 static IPAddress server_addr;
 static int net_state = NS_NONE;
-RTC_NOINIT_ATTR uint32_t server_ip;
-RTC_NOINIT_ATTR TimeMessage config;
-RTC_NOINIT_ATTR time_t last_update;
+RTC_MEMORY uint32_t server_ip;
+RTC_MEMORY TimeMessage config;
+RTC_MEMORY time_t last_update;
 
 static bool establish_udp_conn() {
   WiFi.setSleep(false);
@@ -131,7 +135,7 @@ static bool receive_light_data() {
 }
 
 void setup() {
-#if SERIAL
+#ifndef NO_SERIAL
   Serial.begin(115200);
 #endif
   pinMode(LED_BUILTIN, OUTPUT);
@@ -316,10 +320,14 @@ void loop() {
     esp_sleep_enable_timer_wakeup(wait * 1000);
     PRINTF("Sleep for %dms, light=%d\n", wait, light_on);
     FLUSH();
-    //if (wait < 25000 || light_on) {
+    #ifdef USE_DEEP_SLEEP
+    if (wait < 25000 || light_on) {
       esp_light_sleep_start();
-    //} else {
-    //  esp_deep_sleep_start();
-    //}
+    } else {
+      esp_deep_sleep_start();
+    }
+    #else
+    esp_light_sleep_start();
+    #endif
   }
 }
