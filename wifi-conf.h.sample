@@ -1,0 +1,4 @@
+#define WIFI_SSID "wifi"
+#define WIFI_PASS "pass" 
+#define CONF_SERVER "server"
+#define CONF_SERVER_PORT 7117
